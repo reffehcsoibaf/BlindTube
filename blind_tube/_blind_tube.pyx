@@ -906,7 +906,7 @@ class MainWindow(Dialog):
         self.yttransc = YouTubeTranscriptApi()
         self.transcript = []
         self.currentLanguageCode = 0
-        self.currentVersion = "12/01/2026"
+        self.currentVersion = "18/08/2026"
         self.instanceChecker = wx.SingleInstanceChecker(self.appName)
         self.instanceData = instanceData
         if self.instanceData:
@@ -1367,7 +1367,7 @@ class MainWindow(Dialog):
 
     def get_stream_url(self, video_url):
         cmd = [
-            "yt-dlp", "-g", "-f", "18", "--cookies", "cookies.txt", "-R", "5",
+            "yt-dlp", "-g", "-f", "18", "--cookies", "cookies.txt", "-R", "5", "--extractor-args", "youtube:player_client=android",
             f'{video_url}'
         ]
 
@@ -1459,7 +1459,7 @@ class MainWindow(Dialog):
 
     def start_ytdl_download(self, url, file_path, format, video_data, download_dial, downloading_dial, download_progress, single=True, list_to_focus=None):
         cmd = [
-            "yt-dlp", "-f", "18", "--cookies", "cookies.txt", "--no-mtime", "--windows-filenames",
+            "yt-dlp", "-f", "18", "--cookies", "cookies.txt", "--no-mtime", "--windows-filenames", "--extractor-args", "youtube:player_client=android",
             "-o", file_path, url
         ]
 
@@ -1800,11 +1800,14 @@ class MainWindow(Dialog):
         self.shouldPlayNext = True
         yt = build_ytb(creds)
         stream_url = self.get_stream_url(videoData["url"])
+        if not stream_url:
+            return
         try:
             videoStream = VideoStream(stream_url, decode=True)
         except Exception as e:
             wx.MessageBox(
                 f"Não foi possível carregar o vídeo solicitado. Isso pode ocorrer se o componente YT-DLP não estiver atualizado ou se o vídeo for uma live ou estreia. Tente abrir este vídeo no navegador padrão pressionando as teclas CTRL+Enter. {traceback.format_exc()}", "Erro ao carregar o vídeo", wx.OK | wx.ICON_ERROR, currentWindow)
+            self.video_is_loading = False
             return
 
         videoStream.sliderString = "O vídeo está carregando..."
