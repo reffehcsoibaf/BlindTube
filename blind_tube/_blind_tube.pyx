@@ -220,6 +220,84 @@ class VideosList(List):
 
 
 languageList = sorted(list(languageDict.keys()))
+audioLanguageNames = {
+    "ar": "Árabe", "bg": "Búlgaro", "bn": "Bengali", "ca": "Catalão", "cs": "Tcheco",
+    "da": "Dinamarquês", "de": "Alemão", "el": "Grego", "en": "Inglês", "es": "Espanhol",
+    "et": "Estoniano", "fa": "Persa", "fi": "Finlandês", "fil": "Filipino", "fr": "Francês",
+    "gu": "Guzerate", "he": "Hebraico", "hi": "Hindi", "hr": "Croata", "hu": "Húngaro",
+    "id": "Indonésio", "it": "Italiano", "ja": "Japonês", "kn": "Canarês", "ko": "Coreano",
+    "lt": "Lituano", "lv": "Letão", "ml": "Malaiala", "mr": "Marata", "ms": "Malaio",
+    "nl": "Holandês", "no": "Norueguês", "pa": "Punjabi", "pl": "Polonês", "pt": "Português",
+    "ro": "Romeno", "ru": "Russo", "sk": "Eslovaco", "sl": "Esloveno", "sr": "Sérvio",
+    "sv": "Sueco", "ta": "Tâmil", "te": "Telugo", "th": "Tailandês", "tr": "Turco",
+    "uk": "Ucraniano", "ur": "Urdu", "vi": "Vietnamita", "zh": "Chinês",
+}
+audioLanguageCodes = {name: code for code, name in audioLanguageNames.items()}
+audioLanguageList = sorted(audioLanguageNames.values(), key=locale.strxfrm)
+ORIGINAL_AUDIO_CHOICE = "Idioma original do vídeo"
+
+
+def audioLanguageName(code, fallback=""):
+    parts = str(code).replace("_", "-").split("-", 1)
+    name = audioLanguageNames.get(parts[0].lower()) or fallback or parts[0]
+    if len(parts) > 1 and parts[1]:
+        name += " (" + parts[1].upper() + ")"
+    return name
+
+
+def parseAudioTracks(info, fetchedAt=0):
+    # Recebe o JSON do yt-dlp (-J) e devolve as faixas de áudio por idioma.
+    # Só devolve algo quando o vídeo tem dois ou mais idiomas.
+    bestByLanguage = {}
+    for fmt in info.get("formats") or []:
+        language = fmt.get("language")
+        if not language or fmt.get("ext") != "m4a":
+            continue
+        if fmt.get("vcodec") not in (None, "none"):
+            continue
+        if not fmt.get("url") or fmt.get("protocol") not in ("https", "http"):
+            continue
+        note = str(fmt.get("format_note") or "")
+        isOriginal = "original" in note.lower()
+        quality = fmt.get("abr") or fmt.get("tbr") or 0
+        entry = bestByLanguage.get(language)
+        if entry is None:
+            bestByLanguage[language] = {"code": language, "original": isOriginal,
+                                        "quality": quality, "url": fmt["url"],
+                                        "note": note, "fetchedAt": fetchedAt}
+        else:
+            if isOriginal:
+                entry["original"] = True
+            if quality > entry["quality"]:
+                entry["quality"] = quality
+                entry["url"] = fmt["url"]
+    tracks = list(bestByLanguage.values())
+    if len(tracks) < 2:
+        return []
+    for track in tracks:
+        englishName = track["note"].split(",")[0].replace(
+            "original (default)", "").replace("original", "").strip()
+        track["name"] = audioLanguageName(track["code"], englishName)
+        track["label"] = track["name"] + \
+            (" (original)" if track["original"] else "")
+    tracks.sort(key=lambda track: (not track["original"], locale.strxfrm(track["name"].lower())))
+    return tracks
+
+
+def findAudioTrack(tracks, code):
+    if not tracks or not code:
+        return None
+    code = code.lower()
+    for track in tracks:
+        if track["code"].lower() == code:
+            return track
+    base = code.split("-")[0]
+    for track in tracks:
+        if track["code"].lower().split("-")[0] == base:
+            return track
+    return None
+
+
 formatList = ["mp4", "mp3", "wav", "ogg", "flac", "m4a"]
 brazilTimezone = pytz.timezone("America/Sao_Paulo")
 
@@ -954,6 +1032,7 @@ class MainWindow(Dialog):
             "default_speed": "default",
             "notifications": "on",
             "default_transcript_language": "default",
+            "default_audio_language": "default",
         }
 
     def getMainSubs(self):
@@ -1345,7 +1424,7 @@ class MainWindow(Dialog):
         return True if settingValue == "on" else False
 
     def getChannelSettingOrigin(self, settingName, channelId):
-        if self.conf.has_section(channelId):
+        if self.conf.has_section(channelId) and settingName in self.conf[channelId]:
             settingValue = self.conf[channelId][settingName]
         else:
             settingValue = self.defaultChannelConf[settingName]
@@ -1383,6 +1462,40 @@ class MainWindow(Dialog):
         for output in result.stdout.split("\n"):
             if ytb_regex.match(output):
                 return ytb_regex.match(output).group()
+
+    def getPreferredAudioLanguage(self, channelId):
+        language = self.getChannelSettingOrigin(
+            "default_audio_language", channelId)
+        if language == "default":
+            language = self.getSettingOrigin("default_audio_language")
+        return language
+
+    def get_audio_tracks(self, video_url):
+        # Pergunta ao yt-dlp (cliente padrão, o único que lista as dublagens)
+        # quais idiomas de áudio o vídeo possui.
+        cmd = [
+            "yt-dlp", "-J", "--no-playlist", "--no-warnings", "--cookies", "cookies.txt", "-R", "5",
+            f'{video_url}'
+        ]
+        env = dict(os.environ)
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW, timeout=120)
+            if result.returncode != 0 or not result.stdout:
+                return []
+            return parseAudioTracks(json.loads(result.stdout), time.time())
+        except Exception as e:
+            return []
+
+    def get_audio_track_url(self, video_url, track):
+        # As URLs do YouTube expiram; se a lista de idiomas já é antiga, busca de novo.
+        if track.get("url") and time.time() - track.get("fetchedAt", 0) < 1800:
+            return track["url"]
+        newTrack = findAudioTrack(self.get_audio_tracks(video_url), track["code"])
+        return newTrack["url"] if newTrack else None
 
     def on_download(self, event, videoTitle, video_id, currentWindow, listToFocus=None):
         videoTitle = fixChars(videoTitle)
@@ -1796,19 +1909,50 @@ class MainWindow(Dialog):
         playlistDial.Bind(EVT_VIDEO_CLOSE, onVideoClosed)
         playlistDial.Show()
 
-    def playVideo(self, currentWindow, videoData, videosData=None, isPlaylist=False, isAuto=False, playlistData=None, playlistItems=None, oldWindow=None, oldStream=None):
+    def playVideo(self, currentWindow, videoData, videosData=None, isPlaylist=False, isAuto=False, playlistData=None, playlistItems=None, oldWindow=None, oldStream=None, audioLanguage=None, audioTracks=None, keepState=None):
+        # audioLanguage: None = decidir pelas configurações; "original" = idioma original
+        # (formato 18); qualquer outro valor = código do idioma escolhido pelo usuário.
         self.shouldPlayNext = True
         yt = build_ytb(creds)
-        stream_url = self.get_stream_url(videoData["url"])
-        if not stream_url:
-            return
-        try:
-            videoStream = VideoStream(stream_url, decode=True)
-        except Exception as e:
-            wx.MessageBox(
-                f"Não foi possível carregar o vídeo solicitado. Isso pode ocorrer se o componente YT-DLP não estiver atualizado ou se o vídeo for uma live ou estreia. Tente abrir este vídeo no navegador padrão pressionando as teclas CTRL+Enter. {traceback.format_exc()}", "Erro ao carregar o vídeo", wx.OK | wx.ICON_ERROR, currentWindow)
-            self.video_is_loading = False
-            return
+        audioIsUserChoice = audioLanguage is not None
+        videoStream = None
+        if audioLanguage is None:
+            preferredLanguage = self.getPreferredAudioLanguage(
+                videoData["channelId"])
+            if preferredLanguage != "original":
+                audioTracks = self.get_audio_tracks(videoData["url"])
+                preferredTrack = findAudioTrack(audioTracks, preferredLanguage)
+                if preferredTrack and not preferredTrack["original"]:
+                    audioLanguage = preferredTrack["code"]
+        if audioLanguage and audioLanguage != "original":
+            audioTrack = findAudioTrack(audioTracks, audioLanguage)
+            audioUrl = self.get_audio_track_url(
+                videoData["url"], audioTrack) if audioTrack else None
+            if audioUrl:
+                try:
+                    videoStream = VideoStream(audioUrl, decode=True)
+                except Exception as e:
+                    videoStream = None
+            if videoStream is None:
+                if audioIsUserChoice:
+                    wx.CallAfter(
+                        wx.MessageBox, "Não foi possível carregar o áudio neste idioma. O vídeo continua no idioma atual.", "Erro ao carregar o áudio", wx.OK | wx.ICON_ERROR, currentWindow)
+                    self.video_is_loading = False
+                    return
+                speak(
+                    "Não foi possível carregar o idioma de áudio preferido. Usando o idioma original.")
+        if videoStream is None:
+            audioLanguage = "original"
+            stream_url = self.get_stream_url(videoData["url"])
+            if not stream_url:
+                return
+            try:
+                videoStream = VideoStream(stream_url, decode=True)
+            except Exception as e:
+                wx.MessageBox(
+                    f"Não foi possível carregar o vídeo solicitado. Isso pode ocorrer se o componente YT-DLP não estiver atualizado ou se o vídeo for uma live ou estreia. Tente abrir este vídeo no navegador padrão pressionando as teclas CTRL+Enter. {traceback.format_exc()}", "Erro ao carregar o vídeo", wx.OK | wx.ICON_ERROR, currentWindow)
+                self.video_is_loading = False
+                return
 
         videoStream.sliderString = "O vídeo está carregando..."
         rattingResponse = yt.videos().getRating(id=videoData["id"]).execute()
@@ -1828,6 +1972,9 @@ class MainWindow(Dialog):
             playlistItems = event.playlistItems
             oldWindow = event.oldWindow
             oldStream = event.oldStream
+            audioLanguage = event.audioLanguage
+            audioTracks = event.audioTracks
+            keepState = event.keepState
             if isPlaylist:
                 videoPosOnPlaylist = videosData.index(videoData)
             else:
@@ -2344,6 +2491,69 @@ class MainWindow(Dialog):
                     speedMenu.Bind(wx.EVT_MENU, onSpeedSelected)
                 playerDial.PopupMenu(speedMenu)
             changeSpeed.Bind(wx.EVT_BUTTON, onSpeedChange)
+            changeAudio = LinkButton(
+                playerDial, mainLabel="Idioma do &áudio")
+            changeAudio.Hide()
+
+            def currentAudioTrack():
+                for track in audioTracks or []:
+                    if audioLanguage == "original":
+                        if track["original"]:
+                            return track
+                    elif track["code"] == audioLanguage:
+                        return track
+                return None
+
+            def updateAudioButton():
+                track = currentAudioTrack()
+                changeAudio.SetLabel(
+                    "Idioma do &áudio: " + (track["label"] if track else "original"))
+
+            def switchAudio(track):
+                newLanguage = "original" if track["original"] else track["code"]
+                if newLanguage == audioLanguage:
+                    return
+                if self.video_is_loading:
+                    speak(
+                        "Aguarde, ainda há um vídeo sendo carregado.", interrupt=True)
+                    return
+                self.video_is_loading = True
+                speak("Carregando o áudio em " + track["name"] + "...", interrupt=True)
+                keep = {"tempo": videoStream.tempo,
+                        "volume": videoStream.get_volume()}
+                CustomThread(target=self.playVideo, args=(currentWindow, videoData, videosData, isPlaylist, True,
+                                                          playlistData, playlistItems, playerDial, videoStream, newLanguage, audioTracks, keep)).start()
+
+            def onAudioChange(event):
+                if not audioTracks:
+                    return
+                audioMenu = wx.Menu()
+                current = currentAudioTrack()
+                for index, track in enumerate(audioTracks):
+                    menuItem = audioMenu.AppendRadioItem(
+                        index+1, track["label"])
+                    if track is current:
+                        menuItem.Check(True)
+
+                def onAudioSelected(event):
+                    switchAudio(audioTracks[event.GetId()-1])
+                audioMenu.Bind(wx.EVT_MENU, onAudioSelected)
+                playerDial.PopupMenu(audioMenu)
+            changeAudio.Bind(wx.EVT_BUTTON, onAudioChange)
+
+            def onAudioTracksFound(tracks, announce=True):
+                nonlocal audioTracks
+                try:
+                    if not tracks or self.current_video_id != videoData["id"]:
+                        return
+                    audioTracks = tracks
+                    updateAudioButton()
+                    changeAudio.Show()
+                    if announce:
+                        speak(
+                            "Este vídeo tem áudio em vários idiomas. Pressione alt+á para escolher o idioma.")
+                except RuntimeError:
+                    pass
             goToPosition = LinkButton(
                 playerDial, mainLabel="I&r para a posição...")
 
@@ -3165,6 +3375,24 @@ class MainWindow(Dialog):
             videoSpeed = videoSpeeds[speedString]
             videoStream.tempo = videoSpeed
             changeSpeed.SetLabel("Velocidad&e do vídeo: "+speedString)
+            if keepState:
+                # Troca de idioma do áudio: mantém a velocidade e o volume que estavam em uso.
+                speedNames = list(videoSpeeds.keys())
+                speedNumbers = list(videoSpeeds.values())
+                closestIndex = min(range(len(speedNumbers)), key=lambda i: abs(
+                    speedNumbers[i]-keepState["tempo"]))
+                if abs(speedNumbers[closestIndex]-keepState["tempo"]) < 1:
+                    videoStream.tempo = speedNumbers[closestIndex]
+                    changeSpeed.SetLabel(
+                        "Velocidad&e do vídeo: "+speedNames[closestIndex])
+                keptVolume = keepState["volume"]
+                if abs(keptVolume-1) > 0.001:
+                    videoStream.set_volume(keptVolume)
+                    volumeControl.SetValue(round(keptVolume*100))
+                    if keptVolume >= 1.01:
+                        volumeLabel.Disable()
+                        volumeControl.Disable()
+                        backOriginVolume.Enable(True)
             languageString = self.getChannelSettingOrigin(
                 "default_transcript_language", channelId)
             if languageString == "default":
@@ -3177,6 +3405,14 @@ class MainWindow(Dialog):
                 "Idioma para buscar a transcri&ção: " + languageName)
             self.video_is_loading = False
             playerDial.Show()
+            if audioTracks is None:
+                def discoverAudioTracks():
+                    tracks = self.get_audio_tracks(videoData["url"])
+                    if tracks:
+                        wx.CallAfter(onAudioTracksFound, tracks)
+                CustomThread(target=discoverAudioTracks, daemon=True).start()
+            elif audioTracks:
+                onAudioTracksFound(audioTracks, announce=False)
             if isAuto:
                 oldWindow.Destroy()
                 oldStream.free()
@@ -3219,7 +3455,7 @@ class MainWindow(Dialog):
             return
         currentWindow.Bind(EVT_LOAD, onVideoLoad)
         wx.PostEvent(currentWindow, LoadEvent(currentWindow=currentWindow, videoStream=videoStream, videoData=videoData, videosData=videosData, isPlaylist=isPlaylist,
-                     isAuto=isAuto, playlistData=playlistData, playlistItems=playlistItems, oldWindow=oldWindow, oldStream=oldStream, channelData=channelData))
+                     isAuto=isAuto, playlistData=playlistData, playlistItems=playlistItems, oldWindow=oldWindow, oldStream=oldStream, channelData=channelData, audioLanguage=audioLanguage, audioTracks=audioTracks, keepState=keepState))
 
     def load_channel(self, channelId, currentWindow):
         yt = build_ytb(creds)
@@ -3776,6 +4012,19 @@ class MainWindow(Dialog):
                 languageName = list(languageDict.keys())[list(
                     languageDict.values()).index(languageCode)]
             transcriptLanguageBox.SetStringSelection(languageName)
+            channelAudioLabel = wx.StaticText(
+                channelSetDial, label="Idioma preferido do á&udio nos vídeos do canal")
+            channelAudioBox = wx.ComboBox(
+                channelSetDial, choices=["Padrão", ORIGINAL_AUDIO_CHOICE] + audioLanguageList, style=wx.CB_READONLY)
+            channelAudioCode = self.getChannelSettingOrigin(
+                "default_audio_language", channelId)
+            if channelAudioCode == "default":
+                channelAudioBox.SetStringSelection("Padrão")
+            elif channelAudioCode in audioLanguageNames:
+                channelAudioBox.SetStringSelection(
+                    audioLanguageNames[channelAudioCode])
+            else:
+                channelAudioBox.SetStringSelection(ORIGINAL_AUDIO_CHOICE)
             ok = wx.Button(channelSetDial, wx.ID_OK, "Ok")
 
             def onOk(event):
@@ -3797,6 +4046,16 @@ class MainWindow(Dialog):
                 else:
                     self.setChannelSettingOrigin(
                         "default_transcript_language", languageDict[newTranscriptLanguage], channelId)
+                newAudioChoice = channelAudioBox.GetValue()
+                if newAudioChoice == "Padrão":
+                    newAudioValue = "default"
+                elif newAudioChoice == ORIGINAL_AUDIO_CHOICE:
+                    newAudioValue = "original"
+                else:
+                    newAudioValue = audioLanguageCodes.get(
+                        newAudioChoice, "default")
+                self.setChannelSettingOrigin(
+                    "default_audio_language", newAudioValue, channelId)
                 with open("blind_tube.ini", "w") as configFile:
                     self.conf.write(configFile)
                 self.on_window_close(event)
@@ -4427,6 +4686,16 @@ class MainWindow(Dialog):
             languageName = list(languageDict.keys())[list(
                 languageDict.values()).index(languageCode)]
             transcriptLanguageBox.SetStringSelection(languageName)
+            audioLanguageLabel = wx.StaticText(
+                settingsDial, label="Idioma preferido do á&udio nos vídeos com dublagem")
+            audioLanguageBox = wx.ComboBox(
+                settingsDial, choices=[ORIGINAL_AUDIO_CHOICE] + audioLanguageList, style=wx.CB_READONLY)
+            audioLanguageCode = self.getSettingOrigin("default_audio_language")
+            if audioLanguageCode in audioLanguageNames:
+                audioLanguageBox.SetStringSelection(
+                    audioLanguageNames[audioLanguageCode])
+            else:
+                audioLanguageBox.SetSelection(0)
             autoTranslateTranscriptsLabel = wx.StaticText(
                 settingsDial, label="Tradu&zir as transcrições automaticamente caso necessário")
             autoTranslateTranscripts = wx.CheckBox(settingsDial)
@@ -4501,6 +4770,8 @@ class MainWindow(Dialog):
                 self.setSetting("sounds", enableSounds.GetValue())
                 self.setSettingOrigin(
                     "default_transcript_language", languageDict[transcriptLanguageBox.GetValue()])
+                self.setSettingOrigin(
+                    "default_audio_language", audioLanguageCodes.get(audioLanguageBox.GetValue(), "original"))
                 self.setSetting("auto_translate_transcripts",
                                 autoTranslateTranscripts.GetValue())
                 self.setSettingOrigin(
