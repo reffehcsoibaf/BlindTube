@@ -18,3 +18,11 @@ venv/
 blind_tube/cookies.txt
 # módulo compilado pelo Cython (gerado por: python setup.py build_ext --inplace)
 *.pyd
+# arquivos criados pelo programa durante o uso (configurações, históricos e logs)
+blind_tube/blind_tube.ini
+blind_tube/logs/
+blind_tube/data/search_history.txt
+blind_tube/data/watcheds.txt
+blind_tube/data/notifieds.txt
+blind_tube/data/opened.txt
+blind_tube/data/windows_start_set.txt
