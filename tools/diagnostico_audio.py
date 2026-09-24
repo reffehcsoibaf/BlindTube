@@ -8,8 +8,12 @@ Uso, a partir da pasta blind_tube (onde estão yt-dlp.exe e cookies.txt):
 
     ..\\venv\\Scripts\\python ..\\tools\\diagnostico_audio.py "LINK_DO_VIDEO" pt > diagnostico-audio.txt 2>&1
 """
+import glob
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from urllib.parse import urlparse, parse_qs
@@ -97,6 +101,68 @@ def play_test(label, factory, seconds=6):
             pass
 
 
+def play_file_test(label, path, seconds=4, seek_to=600):
+    """Toca um arquivo local como o programa faria e testa o avanço (seek)."""
+    p(f"--- {label} ---")
+    try:
+        handle = Tempo(stream.FileStream(file=path, decode=True))
+    except Exception:
+        p("FALHOU ao abrir o arquivo:")
+        p(traceback.format_exc())
+        return
+    try:
+        p("duracao (s):", round(handle.length_in_seconds(), 1))
+        handle.play()
+        for i in range(seconds):
+            time.sleep(1)
+            p(f"  t={i + 1}s posicao={round(handle.bytes_to_seconds(), 1)}s tocando={handle.is_playing}")
+        handle.set_position(handle.seconds_to_bytes(seek_to))
+        p(f"  avancou para {seek_to}s")
+        for i in range(seconds):
+            time.sleep(1)
+            p(f"  t={i + 1}s posicao={round(handle.bytes_to_seconds(), 1)}s tocando={handle.is_playing}")
+        handle.stop()
+    except Exception:
+        p("erro durante a reproducao:")
+        p(traceback.format_exc())
+    finally:
+        try:
+            handle.free()
+        except Exception:
+            pass
+
+
+def download_and_play(video_url, language):
+    """Baixa o m4a dublado com o yt-dlp (corrigindo o container) e toca o arquivo."""
+    folder = tempfile.mkdtemp(prefix="bt_diag_")
+    try:
+        cmd = ["yt-dlp", "-f", f"ba[ext=m4a][language={language}]", "--fixup", "force",
+               "--no-part", "--no-playlist", "-q", "--no-warnings", "--cookies", "cookies.txt",
+               "-o", os.path.join(folder, "dub.%(ext)s"), video_url]
+        p("comando:", " ".join(cmd))
+        start = time.time()
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=300)
+        elapsed = time.time() - start
+        p("yt-dlp saiu com codigo", result.returncode, f"em {elapsed:.1f}s")
+        if result.stderr.strip():
+            p("yt-dlp stderr:", result.stderr.strip()[:800])
+        files = glob.glob(os.path.join(folder, "dub.*"))
+        if not files:
+            p("nenhum arquivo foi gerado")
+            return
+        for f in files:
+            p("arquivo:", os.path.basename(f), os.path.getsize(f), "bytes")
+        with open(files[0], "rb") as fh:
+            p("primeiros bytes:", fh.read(32))
+        play_file_test("arquivo local (baixado pelo yt-dlp)", files[0])
+    except Exception:
+        p("erro:")
+        p(traceback.format_exc())
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def main():
     if len(sys.argv) < 2:
         p("Uso: diagnostico_audio.py LINK [codigo_do_idioma]")
@@ -127,6 +193,20 @@ def main():
                   lambda: stream.URLStream(url_dub))
     else:
         p("nao foi possivel obter a URL do m4a dublado")
+
+    p()
+    p(f"=== ALTERNATIVA 1: HLS (m3u8) so de audio em '{language}' ===")
+    url_hls = get_url(video_url, f"ba[protocol^=m3u8][language={language}]")
+    if url_hls:
+        p("URL do manifesto:", url_hls[:120], "...")
+        play_test("HLS (Tempo + decode, como o programa)",
+                  lambda: Tempo(stream.URLStream(url_hls, decode=True)))
+    else:
+        p("nao foi possivel obter a URL do HLS")
+
+    p()
+    p(f"=== ALTERNATIVA 2: baixar o m4a '{language}' e tocar o arquivo ===")
+    download_and_play(video_url, language)
     p()
     p("fim do diagnostico")
 
