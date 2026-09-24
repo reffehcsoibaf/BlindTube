@@ -16,3 +16,5 @@ blind_tube/sound_lib/
 venv/
 # cookies.txt é reescrito pelo yt-dlp a cada uso; não deve ir para o repositório
 blind_tube/cookies.txt
+# módulo compilado pelo Cython (gerado por: python setup.py build_ext --inplace)
+*.pyd
