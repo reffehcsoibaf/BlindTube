@@ -82,7 +82,7 @@ Ctrl+s: informa a posição atual do vídeo e a duração total, semelhante ao que ap
 controle deslizante de posição.
 Ctrl+v: informa o volume atual do vídeo.
 Ctrl+shift+v: informa a velocidade atual do vídeo.
-Alt+á: quando o vídeo tem áudio em vários idiomas (dublagens), abre um menu para escolher o 
+Alt+i: quando o vídeo tem áudio em vários idiomas (dublagens), abre um menu para escolher o 
 idioma do áudio. O botão só aparece depois que o Blind Tube descobre os idiomas disponíveis, e o 
 programa avisa por voz quando isso acontece. Ao trocar, o Blind Tube precisa preparar o áudio 
 daquele idioma antes de tocar, o que pode levar alguns segundos (o programa avisa por voz 
