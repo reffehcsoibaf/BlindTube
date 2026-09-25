@@ -2550,7 +2550,7 @@ class MainWindow(Dialog):
                 playerDial.PopupMenu(speedMenu)
             changeSpeed.Bind(wx.EVT_BUTTON, onSpeedChange)
             changeAudio = LinkButton(
-                playerDial, mainLabel="&Idioma do áudio")
+                playerDial, mainLabel="Tril&ha de áudio")
             changeAudio.Hide()
 
             def currentAudioTrack():
@@ -2565,7 +2565,7 @@ class MainWindow(Dialog):
             def updateAudioButton():
                 track = currentAudioTrack()
                 changeAudio.SetLabel(
-                    "Idioma do áudio: " + (track["label"] if track else "original"))
+                    "Trilha de áudio: " + (track["label"] if track else "original"))
 
             def switchAudio(track):
                 newLanguage = "original" if track["original"] else track["code"]
@@ -2610,7 +2610,7 @@ class MainWindow(Dialog):
                     changeAudio.Show()
                     if announce:
                         speak(
-                            "Este vídeo tem áudio em vários idiomas. Pressione alt+i para escolher o idioma.")
+                            "Este vídeo tem áudio em vários idiomas. Pressione alt+h para escolher o idioma.")
                 except RuntimeError:
                     pass
             goToPosition = LinkButton(
