@@ -878,8 +878,11 @@ class LinkButton(wx.adv.CommandLinkButton):
 
 
 class VideoStream(Tempo):
-    def __init__(self, *args, **kwargs):
-        videoStream = stream.URLStream(*args, **kwargs)
+    def __init__(self, source, *args, **kwargs):
+        if os.path.isfile(source):
+            videoStream = stream.FileStream(file=source, **kwargs)
+        else:
+            videoStream = stream.URLStream(source, *args, **kwargs)
         super().__init__(videoStream)
         self.sliderString = ""
         self.isLoaded = True
@@ -1490,12 +1493,57 @@ class MainWindow(Dialog):
         except Exception as e:
             return []
 
-    def get_audio_track_url(self, video_url, track):
-        # As URLs do YouTube expiram; se a lista de idiomas já é antiga, busca de novo.
-        if track.get("url") and time.time() - track.get("fetchedAt", 0) < 1800:
-            return track["url"]
-        newTrack = findAudioTrack(self.get_audio_tracks(video_url), track["code"])
-        return newTrack["url"] if newTrack else None
+    def clean_audio_cache(self, cacheFolder, maxAge=7200):
+        # Apaga áudios antigos. Arquivos em uso por outra instância não podem ser
+        # apagados no Windows; nesse caso o erro é ignorado e fica para a próxima vez.
+        now = time.time()
+        for fileName in os.listdir(cacheFolder):
+            filePath = os.path.join(cacheFolder, fileName)
+            try:
+                if os.path.isfile(filePath) and now - os.path.getmtime(filePath) > maxAge:
+                    os.remove(filePath)
+            except OSError:
+                pass
+
+    def get_audio_track_file(self, video_url, video_id, track):
+        # O áudio das dublagens vem em MP4 fragmentado, que a biblioteca de som não
+        # toca. O yt-dlp baixa e corrige o container, e o programa toca o arquivo local.
+        cacheFolder = os.path.join("data", "audio_cache")
+        os.makedirs(cacheFolder, exist_ok=True)
+        self.clean_audio_cache(cacheFolder)
+        safeName = re.sub(r"[^A-Za-z0-9_-]", "_", f"{video_id}_{track['code']}")
+        filePath = os.path.join(cacheFolder, safeName+".m4a")
+        if os.path.isfile(filePath) and os.path.getsize(filePath) > 0:
+            return filePath
+        cmd = [
+            "yt-dlp", "-f", f"ba[ext=m4a][language={track['code']}]", "--fixup", "force", "--no-part",
+            "--no-playlist", "-q", "--no-warnings", "--cookies", "cookies.txt", "-R", "5",
+            "-o", os.path.join(cacheFolder, safeName+".%(ext)s"), f'{video_url}'
+        ]
+        try:
+            process = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        except Exception as e:
+            return None
+        startTime = time.time()
+        lastNotice = startTime
+        while process.poll() is None:
+            time.sleep(0.5)
+            if time.time() - lastNotice >= 15:
+                lastNotice = time.time()
+                speak("Ainda preparando o áudio...")
+            if time.time() - startTime > 600:
+                process.kill()
+                break
+        if os.path.isfile(filePath) and os.path.getsize(filePath) > 0 and process.returncode == 0:
+            return filePath
+        try:
+            if os.path.isfile(filePath):
+                os.remove(filePath)
+        except OSError:
+            pass
+        return None
 
     def on_download(self, event, videoTitle, video_id, currentWindow, listToFocus=None):
         videoTitle = fixChars(videoTitle)
@@ -1926,13 +1974,23 @@ class MainWindow(Dialog):
                     audioLanguage = preferredTrack["code"]
         if audioLanguage and audioLanguage != "original":
             audioTrack = findAudioTrack(audioTracks, audioLanguage)
-            audioUrl = self.get_audio_track_url(
-                videoData["url"], audioTrack) if audioTrack else None
-            if audioUrl:
+            audioFile = None
+            if audioTrack:
+                if not audioIsUserChoice:
+                    speak("Preparando o áudio em " + audioTrack["name"] +
+                          ". Isso pode levar alguns segundos.", interrupt=True)
+                audioFile = self.get_audio_track_file(
+                    videoData["url"], videoData["id"], audioTrack)
+            if audioFile:
                 try:
-                    videoStream = VideoStream(audioUrl, decode=True)
+                    videoStream = VideoStream(audioFile, decode=True)
                 except Exception as e:
                     videoStream = None
+            if videoStream is not None and audioIsUserChoice and oldWindow is not None and self.current_player_window is not oldWindow:
+                # O usuário fechou o player enquanto o áudio era preparado.
+                videoStream.free()
+                self.video_is_loading = False
+                return
             if videoStream is None:
                 if audioIsUserChoice:
                     wx.CallAfter(
@@ -2518,7 +2576,8 @@ class MainWindow(Dialog):
                         "Aguarde, ainda há um vídeo sendo carregado.", interrupt=True)
                     return
                 self.video_is_loading = True
-                speak("Carregando o áudio em " + track["name"] + "...", interrupt=True)
+                speak("Preparando o áudio em " + track["name"] +
+                      ". Isso pode levar alguns segundos.", interrupt=True)
                 keep = {"tempo": videoStream.tempo,
                         "volume": videoStream.get_volume()}
                 CustomThread(target=self.playVideo, args=(currentWindow, videoData, videosData, isPlaylist, True,

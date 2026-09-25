@@ -84,9 +84,11 @@ Ctrl+v: informa o volume atual do vídeo.
 Ctrl+shift+v: informa a velocidade atual do vídeo.
 Alt+á: quando o vídeo tem áudio em vários idiomas (dublagens), abre um menu para escolher o 
 idioma do áudio. O botão só aparece depois que o Blind Tube descobre os idiomas disponíveis, e o 
-programa avisa por voz quando isso acontece. Ao trocar, o vídeo continua do mesmo ponto, com a 
-mesma velocidade e volume. Você também pode definir o idioma de áudio preferido nas 
-configurações do programa e nas configurações de cada canal.
+programa avisa por voz quando isso acontece. Ao trocar, o Blind Tube precisa preparar o áudio 
+daquele idioma antes de tocar, o que pode levar alguns segundos (o programa avisa por voz 
+enquanto isso). Depois de preparado, o vídeo continua do mesmo ponto, com a mesma velocidade e 
+volume. Você também pode definir o idioma de áudio preferido nas configurações do programa e nas 
+configurações de cada canal; nesse caso, a preparação acontece antes de o vídeo abrir.
 
 Atalhos da seção de comentários (grande parte também se aplica às 
 respostas de comentários):
